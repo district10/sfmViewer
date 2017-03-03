@@ -1,0 +1,263 @@
+<!doctype html>
+<html>
+<head>
+    <title>SFM Data Viewer</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <meta original_author="yuyou">
+    <meta original_source="https://gist.github.com/yuyou/2665238329ca34f0288b073d735a7bcb">
+    <script src="https://code.jquery.com/jquery-3.1.0.min.js"></script>
+    <!--
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r84/three.min.js"></script>
+    -->
+    <script src="three.js"></script>
+    <!-- https://github.com/mrdoob/stats.js -->
+    <script src="http://threejs.org/examples/js/libs/stats.min.js"></script>
+    <script src="http://threejs.org/examples/js/Detector.js"></script>
+    <script src="https://stemkoski.github.io/Three.js/js/THREEx.WindowResize.js"></script>
+    <script src="http://threejs.org/examples/js/controls/TrackballControls.js"></script>
+    <style>
+        body {
+            color: #ffffff;
+            font-family:Monospace;
+            font-size:13px;
+            text-align:center;
+            font-weight: bold;
+
+            background-color: #000000;
+            margin: 0px;
+            overflow: hidden;
+        }
+        #info {
+            color:#ffffff;
+            position: absolute;
+            top: 0px; width: 100%;
+            padding: 5px;
+
+        }
+        a {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+<a href="https://github.com/district10/sfmViewer">
+    <img
+        style="position: absolute; top: 0; right: 0; border: 0; width: 149px; height: 149px;"
+        src="fork-me-on-github.png" alt="Fork me on GitHub"></a>
+<div id="container"></div>
+<div id="info">
+    <a href="https://github.com/openMVG/openMVG" target="_blank">OpenMVG</a> sfm_data.json viewer (drag here to load)
+</div>
+<script>
+    'use strict';
+
+    var load_image = true; // if true, original images must exist at the same folder, otherwise a colored plain is used
+    var scaling = 1.0;
+    var point_size = 0.01;
+    var camera_size = 0.2;
+    var sfm_data;
+    var stats, scene, renderer;
+    var camera, cameraControls;
+
+    $( document ).ready(function() {
+        console.log( "openMVG sfm_data.json Viewer!" );
+        load_sfm( 'sfm_data.json' ); if( !init() )  { animate(); }
+    });
+
+    function load_sfm(url){
+        $.getJSON(url, function(obj) {
+            sfm_data = obj; //.views;
+            console.log("View counts:", sfm_data.views.length);
+            create_camerapose_geometries();
+            create_pointcloud_geometry();
+        });
+
+    }
+
+    function _create_camera_geometry(key_id){
+
+        var geometry1 = new THREE.PlaneGeometry( camera_size, camera_size );
+        var geometry2 = new THREE.PlaneGeometry( camera_size, camera_size );
+        geometry2.applyMatrix( new THREE.Matrix4().makeRotationY( Math.PI ) );
+        geometry2.applyMatrix( new THREE.Matrix4().makeRotationZ( Math.PI ) );
+
+        var material1 = new THREE.MeshBasicMaterial({color: 0xffff00, side: THREE.FrontSide});
+        var material2;
+        var texture_url = sfm_data.root_path + '/' + sfm_data.views[key_id].value.ptr_wrapper.data.filename;
+        if (load_image) {
+            // load the texture
+            material2 = new THREE.MeshBasicMaterial({
+                map: new THREE.TextureLoader().load( texture_url )
+            });
+            console.log(texture_url);
+        } else {
+            material2 = new THREE.MeshBasicMaterial({color: 0xffffff, side: THREE.FrontSide});
+        }
+
+        var card = new THREE.Object3D();
+        card.add( new THREE.Mesh( geometry1, material1 ));
+        card.add( new THREE.Mesh( geometry2, material2 ));
+
+        // now we add the normal line
+        var _geometry = new THREE.Geometry();
+        _geometry.vertices.push(new THREE.Vector3(0, 0, 0));
+        _geometry.vertices.push(new THREE.Vector3(0, 0, 0.2));
+        var _material = new THREE.LineBasicMaterial({
+            color: 0x0000ff
+        });
+        var line = new THREE.Line(_geometry, _material);
+        card.add(line);
+
+        return card;
+    }
+
+    function create_camerapose_geometries(){
+
+        var camera_count = sfm_data.extrinsics.length;
+        for (var i = 0; i < camera_count; i++) {
+
+            var plane = _create_camera_geometry(i);
+            var center = sfm_data.extrinsics[i].value.center;
+            plane.position.set(center[0]*scaling, center[1]*scaling, center[2]*scaling);
+            var rotation = sfm_data.extrinsics[i].value.rotation;
+            var rotationMatrix = new THREE.Matrix4();
+            rotationMatrix.set(
+                rotation[0][0], rotation[1][0], rotation[2][0],     0,
+                rotation[0][1], rotation[1][1], rotation[2][1],     0,
+                rotation[0][2], rotation[1][2], rotation[2][2],     0,
+                             0,              0,              0,     1 );
+            plane.quaternion.setFromRotationMatrix(rotationMatrix);
+            scene.add(plane);
+
+        }
+    }
+
+    function create_pointcloud_geometry(){
+        var materials = [];
+        var geometry = new THREE.Geometry();
+        var particleCount = sfm_data.structure.length;
+
+        for (var i = 0; i < particleCount; i++) {
+            var p = sfm_data.structure[i].value.X;
+            var vertex = new THREE.Vector3(p[0],p[1],p[2]);
+            geometry.vertices.push(vertex);
+        }
+        var material = new THREE.PointsMaterial({
+            color: [1, 1, 1],
+            size: point_size
+        });
+        var particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+    }
+
+    // init the scene
+    function init(){
+
+        if( Detector.webgl ){
+            renderer = new THREE.WebGLRenderer({
+                antialias               : true,   // to get smoother output
+                preserveDrawingBuffer : true    // to allow screenshot
+            });
+            renderer.setClearColor( 0xbbbbbb );
+        } else {
+            Detector.addGetWebGLMessage();
+            return true;
+        }
+        renderer.setClearColor( 0x000000 );
+        renderer.setSize( window.innerWidth, window.innerHeight );
+        document.getElementById('container').appendChild(renderer.domElement);
+
+        // add Stats.js - https://github.com/mrdoob/stats.js
+        stats = new Stats();
+        stats.domElement.style.position   = 'absolute';
+        stats.domElement.style.bottom = '0px';
+        document.body.appendChild( stats.domElement );
+
+        // create a scene
+        scene = new THREE.Scene();
+        // put a camera in the scene
+        camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 100 );
+        camera.position.set(0, -1, -1);
+        camera.up.y = -150;
+        // camera.applyMatrix( new THREE.Matrix4().makeRotationZ( Math.PI ) );
+        scene.add(camera);
+
+        // create a camera contol
+        cameraControls    = new THREE.TrackballControls( camera, document.getElementById('container') )
+
+        // transparently support window resize
+        THREEx.WindowResize.bind(renderer, camera);
+
+        var light = new THREE.AmbientLight( 0.3 * 0xffffff );
+        scene.add( light );
+        /*
+         var light = new THREE.DirectionalLight( Math.random() * 0xffffff );
+         light.position.set( Math.random(), Math.random(), Math.random() ).normalize();
+         scene.add( light );
+         var light = new THREE.DirectionalLight( Math.random() * 0xffffff );
+         light.position.set( Math.random(), Math.random(), Math.random() ).normalize();
+         scene.add( light );
+         var light = new THREE.PointLight( Math.random() * 0xffffff );
+         light.position.set( Math.random()-0.5, Math.random()-0.5, Math.random()-0.5 )
+         .normalize().multiplyScalar(1.2);
+         scene.add( light );
+         var light = new THREE.PointLight( Math.random() * 0xffffff );
+         light.position.set( Math.random()-0.5, Math.random()-0.5, Math.random()-0.5 )
+         .normalize().multiplyScalar(1.2);
+         scene.add( light );
+         */
+        var axisHelper = new THREE.AxisHelper(500);
+        scene.add(axisHelper);
+
+    }
+
+    // animation loop
+    function animate() {
+        requestAnimationFrame( animate );
+        // do the render
+        render();
+        // update stats
+        stats.update();
+    }
+
+    // render the scene
+    function render() {
+        // update camera controls
+        cameraControls.update();
+        // actually render the scene
+        renderer.render( scene, camera );
+    }
+
+    document.addEventListener( 'dragover', function ( event ) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+    }, false );
+
+    document.addEventListener( 'dragenter', function ( event ) {
+        document.body.style.opacity = 0.5;
+    }, false );
+
+    document.addEventListener( 'dragleave', function ( event ) {
+        document.body.style.opacity = 1;
+    }, false );
+
+    document.addEventListener( 'drop', function ( event ) {
+        event.preventDefault();
+        var reader = new FileReader();
+        reader.addEventListener( 'load', function ( event ) {
+            sfm_data = JSON.parse(event.target.result);
+            create_camerapose_geometries();
+            create_pointcloud_geometry();
+        }, false );
+        reader.readAsText ( event.dataTransfer.files[ 0 ] );
+        if( !init() )  {
+            animate();
+        }
+        document.body.style.opacity = 1;
+    }, false );
+
+</script>
+</body>
+</html>

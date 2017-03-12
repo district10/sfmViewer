@@ -30,9 +30,7 @@
     </style>
 </head>
 <body>
-<!--
 <a href="https://github.com/district10/sfmViewer"><img style="position: absolute; top: 0; left: 0; border: 0;" src="https://camo.githubusercontent.com/567c3a48d796e2fc06ea80409cc9dd82bf714434/68747470733a2f2f73332e616d617a6f6e6177732e636f6d2f6769746875622f726962626f6e732f666f726b6d655f6c6566745f6461726b626c75655f3132313632312e706e67" alt="Fork me on GitHub" data-canonical-src="https://s3.amazonaws.com/github/ribbons/forkme_left_darkblue_121621.png"></a>
--->
 <div id="container"></div>
 <div id="info">
     sfm data viewer, for OpenMVG, VisualSFM, etc
@@ -384,6 +382,24 @@
         return model;
     }
 
+
+    window.addEventListener( 'keydown', function(event){
+        switch ( event.keyCode ) {
+            case 49: /*1*/ controls.target.x += 0.01; break;
+            case 50: /*2*/ controls.target.x -= 0.01; break;
+            case 51: /*3*/ controls.target.y += 0.01; break;
+            case 52: /*4*/ controls.target.y -= 0.01; break;
+            case 53: /*5*/ controls.target.z += 0.01; break;
+            case 54: /*6*/ controls.target.z -= 0.01; break;
+            case 13: /*enter*/ // reset
+                controls.target.set(0,0,0);
+                break;
+            default:
+                console.log("keyCode: "+event.keyCode);
+        }
+    });
+
+
     function log(msg) {
         $("#info")[0].innerHTML = msg;
     }
@@ -395,23 +411,30 @@
         return c2.position.distanceTo(c1.position);
     }
 
-    /*
     config.type = 0;
     function shuffle() {
-        var type = ["xyzw", "xzyw", "yxzw", "yzxw", "zxyw", "zyxw"];
-        var ref = {
-            "x": 1,
-            "y": 2,
-            "z": 3,
-            "w": 4
-        }
+        var t = [
+            [0,1,2],
+            [0,2,1],
+            [1,0,2],
+            [1,2,0],
+            [2,0,1]
+            [2,1,0],
+        ];
+        ++config.type;
+        var c = config.type % t.length;
         for (var i = 0; i < cameraFrustums.length; ++i) {
-            var c = cameraFrustums[i];
-            var q0 = c.quaternion;
-            var q = [q0[0], q0[1], q0[2], q0[3]];
+            var cam = cameraFrustums[i];
+            var q0 = cam.quaternion;
+            var q = [q0.x, q0.y, q0.z, q0.w];
+            cam.quaternion.set(
+                q[t[c][0]],
+                q[t[c][1]],
+                q[t[c][2]],
+                q[3]
+            );
         }
     }
-    */
 
 </script>
 </body>

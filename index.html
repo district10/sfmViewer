@@ -106,9 +106,7 @@
                 clearScene();
                 openmvgCreateCameraFrustums();
                 openmvgCreatePointcloud();
-            }).fail(function(err) {
-                log("Load '"+url+"' failed.");
-            });
+            }).fail(function(err) { log("Load '"+url+"' failed."); });
         } else if (url.endsWith(".nvm")) {
             $.get(url, function(text) {
                 var model = parseNvmFile(text);
@@ -118,9 +116,7 @@
                     nvmCreateCameraFrustums();
                     nvmCreatePointcloud();
                 }
-            }).fail(function(err) {
-                log("Load '"+url+"' failed. (Notice: '.nvm' file can only be loaded via a web server)");
-            });
+            }).fail(function(err) { log("Load '"+url+"' failed. (Notice: '.nvm' file can only be loaded via a web server)"); });
         }
     }
 
@@ -146,14 +142,15 @@
         }
     }
 
-    function createCameraFrustum(url) {
-        var geometry1 = new THREE.PlaneGeometry( 0.2, 0.2 );
-        var geometry2 = new THREE.PlaneGeometry( 0.2, 0.2 );
+    function createCameraFrustum(url, size) {
+        var size = size || 0.1;
+        var geometry1 = new THREE.PlaneGeometry( 2*size, 2*size );
+        var geometry2 = new THREE.PlaneGeometry( 2*size, 2*size );
         geometry2.applyMatrix( new THREE.Matrix4().makeRotationY( Math.PI ) );
         geometry2.applyMatrix( new THREE.Matrix4().makeRotationZ( Math.PI ) );
         var material1 = new THREE.MeshBasicMaterial({color: 0xffff00, side: THREE.FrontSide});
         var material2;
-        if (load_image) {
+        if (load_image && url !== undefined) {
             material2 = new THREE.MeshBasicMaterial({
                 map: new THREE.TextureLoader().load( url )
             });
@@ -163,7 +160,7 @@
         var card = new THREE.Object3D();
         card.add( new THREE.Mesh( geometry1, material1 ));
         card.add( new THREE.Mesh( geometry2, material2 ));
-        var axisHelper = new THREE.AxisHelper(0.1);
+        var axisHelper = new THREE.AxisHelper(size);
         card.add(axisHelper);
         return card;
     }
@@ -208,15 +205,15 @@
             var plane = createCameraFrustum(path);
             var center = cam.X;
             plane.position.set(center[0], center[1], center[2]);
-            plane.quaternion.set(cam.quaternion);
+            plane.quaternion.set( // WXYZ
+                cam.quaternion[0],
+                cam.quaternion[1],
+                cam.quaternion[2],
+                cam.quaternion[3]
+            ).normalize();
+            // plane.rotation.y = Math.PI;
             scene.add(plane);
             cameraFrustums.push(plane);
-
-            var geometry = new THREE.SphereGeometry(0.05, 16, 8);
-            var material = new THREE.MeshBasicMaterial({ wireframe: true, color: 0xff0000 });
-            var mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(center[0],center[1],center[2]);
-            scene.add(mesh);
         }
     }
 
@@ -325,10 +322,10 @@
                     v.path = parts[0].trim().replace(/\\/g, "/");
                     v.focal = parseFloat(nums[0]);
                     v.quaternion = [ // quaternion WXYZ
+                        parseFloat(nums[4]),
                         parseFloat(nums[1]),
                         parseFloat(nums[2]),
-                        parseFloat(nums[3]),
-                        parseFloat(nums[4])
+                        parseFloat(nums[3])
                     ];
                     v.X = [ // camera center
                         parseFloat(nums[5]),
@@ -390,6 +387,31 @@
     function log(msg) {
         $("#info")[0].innerHTML = msg;
     }
+
+    // temp functions to tweet
+    function distance(i, j) {
+        var c1 = cameraFrustums[i];
+        var c2 = cameraFrustums[j];
+        return c2.position.distanceTo(c1.position);
+    }
+
+    /*
+    config.type = 0;
+    function shuffle() {
+        var type = ["xyzw", "xzyw", "yxzw", "yzxw", "zxyw", "zyxw"];
+        var ref = {
+            "x": 1,
+            "y": 2,
+            "z": 3,
+            "w": 4
+        }
+        for (var i = 0; i < cameraFrustums.length; ++i) {
+            var c = cameraFrustums[i];
+            var q0 = c.quaternion;
+            var q = [q0[0], q0[1], q0[2], q0[3]];
+        }
+    }
+    */
 
 </script>
 </body>

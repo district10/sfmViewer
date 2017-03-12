@@ -49,40 +49,52 @@
 <script src="stats.min.js"></script>
 <script src="Detector.js"></script>
 <script src="THREEx.WindowResize.js"></script>
-<script src="TrackballControls.js"></script>
+<script src="FlyControls.js"></script>
 <script src="dat.gui.js"></script>
 <script>
-    'use strict';
-
     var load_image = true;
     var sfm_data;
     var stats, scene, renderer;
     var light, camera, axisHelper;
-    var cameraControls;
+    var controls;
     var cameraFrustums = [], particles;
+    var clock = new THREE.Clock();
 
     var Config = function() {
         this.pointColor = [255, 255, 255];
         this.pointSize = 0.01;
         this.cameraFrustumScale = 1;
         this.model = 'sfm_data.json';
+        this.fileInput = $('<input type="file" />');
+        this.fileInput.on("change", function(e){
+            var f = e.target.files[0];
+            if (f) {
+                var r = new FileReader();
+                r.onload = function(event) {
+                    var text = event.target.result;
+                    loadSfmFromText(text);
+                };
+                r.readAsText(f);
+            }
+        });
+
         this.loadModel = function() {
-            alert("TODO load model here.");
+            this.fileInput.click();
         }
     };
     var config = new Config();
     var gui = new dat.GUI();
-    gui.add(config, 'model', { OpenMVG: "sfm_data.json", TODO_VisualSFM: "todo_url" } ).onChange(function(value){
-        console.log(value);
+    gui.add(config, 'model', { OpenMVG: "sfm_data.json", VisualSFM: "sfm_data.nvm" } ).onChange(function(value){
+        load_sfm( config.model );
     }).name("Models");
-    // gui.add(config, 'loadModel').name("Load Your Own Model File");
+    gui.add(config, 'loadModel').name("Load Model");
     gui.add(config, 'cameraFrustumScale').min(0.1).max(5).step(0.1).onChange(function(value) {
         for (var i = 0; i < cameraFrustums.length; i++) {
             cameraFrustums[i].scale.set(value, value, value);
         }
     }).name("Camera Scale");
     var f1 = gui.addFolder('Point Cloud'); f1.open();
-    f1.add(config, 'pointSize').min(0.01).max(0.05).step(0.005).onChange(function(value) {
+    f1.add(config, 'pointSize').min(0.01).max(0.25).step(0.005).onChange(function(value) {
         particles.material.size = value;
     }).name("Size");
     f1.addColor(config, 'pointColor').onFinishChange(function(value){
@@ -90,21 +102,36 @@
     }).name("Color");
 
     $( document ).ready(function() {
-        // console.log( "openMVG sfm_data.json Viewer!" );
         if( !init() )  { animate(); }
         load_sfm( config.model );
     });
 
     function load_sfm(url){
-        $.getJSON(url, function(obj) {
-            sfm_data = obj;
-            init_scene();
-            create_camerapose_geometries();
-            create_pointcloud_geometry();
-        });
+        console.log("loading "+url);
+        if (url.endsWith(".json")) {
+            $.getJSON(url, function(obj) {
+                sfm_data = obj;
+                init_scene();
+                openmvg_create_camerapose_geometries();
+                openmvg_create_pointcloud_geometry();
+            }).fail(function(err) {
+                log("Load '"+url+"' failed.");
+            });
+        } else if (url.endsWith(".nvm")) {
+            console.log("loading "+url);
+            $.get(url, function(text) {
+                console.log(text.substring(0, 200));
+                var model = parseNvmFile(text);
+                if (model.valid) {
+                    sfm_data = model;
+                }
+            }).fail(function(err) {
+                log("Load '"+url+"' failed. (Notice: '.nvm' file can only be loaded via a web server)");
+            });
+        }
     }
 
-    function _create_camera_geometry(key_id){
+    function _create_camera_geometry(texture_url) {
 
         var geometry1 = new THREE.PlaneGeometry( 0.2, 0.2 );
         var geometry2 = new THREE.PlaneGeometry( 0.2, 0.2 );
@@ -113,13 +140,11 @@
 
         var material1 = new THREE.MeshBasicMaterial({color: 0xffff00, side: THREE.FrontSide});
         var material2;
-        var texture_url = sfm_data.root_path + '/' + sfm_data.views[key_id].value.ptr_wrapper.data.filename;
         if (load_image) {
-            // load the texture
             material2 = new THREE.MeshBasicMaterial({
                 map: new THREE.TextureLoader().load( texture_url )
             });
-            console.log(texture_url);
+            console.log("Loading..."+texture_url);
         } else {
             material2 = new THREE.MeshBasicMaterial({color: 0xffffff, side: THREE.FrontSide});
         }
@@ -144,17 +169,19 @@
     function init_scene() {
         scene.children = [];
         cameraFrustums = [];
+        particles = {};
         scene.add(camera);
         scene.add(light);
         scene.add(axisHelper);
     }
 
-    function create_camerapose_geometries(){
+    function openmvg_create_camerapose_geometries(){
 
         var camera_count = sfm_data.extrinsics.length;
         for (var i = 0; i < camera_count; i++) {
 
-            var plane = _create_camera_geometry(i);
+            var texture_url = sfm_data.root_path + '/' + sfm_data.views[i].value.ptr_wrapper.data.filename;
+            var plane = _create_camera_geometry(texture_url);
             var center = sfm_data.extrinsics[i].value.center;
             plane.position.set(center[0], center[1], center[2]);
             var rotation = sfm_data.extrinsics[i].value.rotation;
@@ -163,7 +190,7 @@
                 rotation[0][0], rotation[1][0], rotation[2][0],     0,
                 rotation[0][1], rotation[1][1], rotation[2][1],     0,
                 rotation[0][2], rotation[1][2], rotation[2][2],     0,
-                             0,              0,              0,     1 );
+                0,              0,              0,     1 );
             plane.quaternion.setFromRotationMatrix(rotationMatrix);
             plane.isCameraFrustum = true;
 
@@ -172,13 +199,51 @@
         }
     }
 
-    function create_pointcloud_geometry(){
+    function nvm_create_camerapose_geometries() {
+
+        var camera_count = sfm_data.cameras.length;
+        for (var i = 0; i < camera_count; i++) {
+
+            var view = sfm_data.cameras[i];
+            var path = view.path;
+            var texture_url = path.substring(path.lastIndexOf('/')+1);
+            var plane = _create_camera_geometry("images/src/"+texture_url);
+            var center = view.X;
+            plane.position.set(center[0], center[1], center[2]);
+            plane.quaternion.set(view.quaternion);
+            plane.isCameraFrustum = true;
+            scene.add(plane);
+            cameraFrustums.push(plane);
+        }
+    }
+
+    function openmvg_create_pointcloud_geometry(){
         var materials = [];
         var geometry = new THREE.Geometry();
         var particleCount = sfm_data.structure.length;
 
         for (var i = 0; i < particleCount; i++) {
             var p = sfm_data.structure[i].value.X;
+            var vertex = new THREE.Vector3(p[0],p[1],p[2]);
+            geometry.vertices.push(vertex);
+        }
+
+        var material = new THREE.PointsMaterial({
+            color: [1, 1, 1],
+            size: 0.01
+        });
+        particles = new THREE.Points(geometry, material);
+        particles.isParticles = true;
+        scene.add(particles);
+    }
+
+    function nvm_create_pointcloud_geometry(){
+        var materials = [];
+        var geometry = new THREE.Geometry();
+        var particleCount = sfm_data.points.length;
+
+        for (var i = 0; i < particleCount; i++) {
+            var p = sfm_data.points[i].X;
             var vertex = new THREE.Vector3(p[0],p[1],p[2]);
             geometry.vertices.push(vertex);
         }
@@ -225,13 +290,16 @@
         // create a scene
         scene = new THREE.Scene();
         // put a camera in the scene
-        camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 100 );
-        camera.position.set(0, -1, -1);
-        camera.up.y = -150;
+        camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.01, 1000 );
+        cameraposition.set(0, -1, -1); camera.up.y = -150;
         // camera.applyMatrix( new THREE.Matrix4().makeRotationZ( Math.PI ) );
 
         // create a camera contol
-        cameraControls    = new THREE.TrackballControls( camera, document.getElementById('container') )
+        controls = new THREE.FlyControls( camera, container );
+        controls.movementSpeed = 1000;
+        controls.rollSpeed = Math.PI / 24;
+        controls.autoForward = false;
+        controls.dragToLook = false;
 
         // transparently support window resize
         THREEx.WindowResize.bind(renderer, camera);
@@ -253,7 +321,8 @@
     // render the scene
     function render() {
         // update camera controls
-        cameraControls.update();
+        var delta = clock.getDelta();
+        controls.update( delta );
         // actually render the scene
         renderer.render( scene, camera );
     }
@@ -275,16 +344,125 @@
         event.preventDefault();
         var reader = new FileReader();
         reader.addEventListener( 'load', function ( event ) {
-            sfm_data = JSON.parse(event.target.result);
-            init_scene();
-            create_camerapose_geometries();
-            create_pointcloud_geometry();
+            var text = event.target.result;
+            loadSfmFromText(text);
         }, false );
         reader.readAsText ( event.dataTransfer.files[ 0 ] );
         if( !init() )  { animate(); }
         document.body.style.opacity = 1;
     }, false );
 
+    function parseNvmFile(text) {
+        // Doc: http://ccwu.me/vsfm/doc.html#The output format: N-View Match (NVM)
+        var model = { }; model.valid = true;
+        var lines = text.split("\n");
+        // check file header
+        if (lines.length < 10 || !lines[0].trim().toLowerCase().startsWith("nvm")) {
+            model.valid = false;
+            return model;
+        }
+        // views
+        var i = 1;
+        do {
+            model.nCameras = parseInt(lines[i++]);
+        } while(isNaN(model.nCameras));
+        model.cameras = [];
+        for (var j = 0; j < model.nCameras; j++) {
+            var parts = lines[i++].split('\t');
+            if (parts.length === 2) {
+                var nums = parts[1].trim().split(' ');
+                if (nums.length === 10 && parseInt(nums[9]) === 0) {
+                    var v = {};
+                    v.path = parts[0].trim().replace(/\\/g, "/");
+                    v.focal = parseFloat(nums[0]);
+                    v.quaternion = [ // quaternion WXYZ
+                        parseFloat(nums[1]),
+                        parseFloat(nums[2]),
+                        parseFloat(nums[3]),
+                        parseFloat(nums[4])
+                    ];
+                    v.X = [ // camera center
+                        parseFloat(nums[5]),
+                        parseFloat(nums[6]),
+                        parseFloat(nums[7])
+                    ];
+                    v.disto = parseFloat(nums[8]);
+                    model.cameras.push(v);
+                }
+            }
+        }
+        if (model.cameras.length !== model.nCameras) {
+            model.valid = false;
+            return model;
+        }
+        // points
+        do {
+            model.nPoints = parseInt(lines[i++]);
+        } while(isNaN(model.nPoints));
+        model.points = [];
+        for (var j = 0; j < model.nPoints; j++) {
+            var nums = lines[i++].trim().split(' ');
+            var invalid = false;
+            var p = {};
+            if (nums.length >= 7) {
+                var nObserve = parseInt(nums[6]);
+                if (!isNaN(nObserve) && nObserve > 0 && (nObserve*4+7) === nums.length) {
+                    p.X = [
+                        parseFloat(nums[0]),
+                        parseFloat(nums[1]),
+                        parseFloat(nums[2])
+                    ];
+                    p.color = [
+                        parseInt(nums[3]),
+                        parseInt(nums[4]),
+                        parseInt(nums[5])
+                    ];
+                    p.measurements = [];
+                    for (var k = 0; k < nObserve; k++) {
+                        var m = {};
+                        m.imageIndex = parseInt(nums[7+k*4+0]);
+                        m.featureIndex = parseInt(nums[7+k*4+1]);
+                        m.x = parseFloat(nums[7+k*4+2]);
+                        m.y = parseFloat(nums[7+k*4+3]);
+                        p.measurements.push(m);
+                    }
+                }
+            }
+            model.points.push(p);
+        }
+        if (model.points.length !== model.nPoints) {
+            model.valid = false;
+            return model;
+        }
+        // TODO, parse more
+        return model;
+    }
+
+    function log(msg) {
+        $("#info")[0].innerHTML = msg;
+    }
+
+    function loadSfmFromText(text) {
+        var header = text.substring(0, 20).split('\n').join('');
+        if (header.startsWith('{')) {
+            sfm_data = JSON.parse(text);
+            if (sfm_data["sfm_data_version"]) {
+                // OpenMVG
+                init_scene();
+                openmvg_create_camerapose_geometries();
+                openmvg_create_pointcloud_geometry();
+            }
+        } else if (header.toLowerCase().startsWith('nvm')) {
+            // VisualSFM nvm file
+            var model = parseNvmFile(text);
+            if (model.valid) {
+                sfm_data = model;
+                init_scene();
+                nvm_create_camerapose_geometries();
+                nvm_create_pointcloud_geometry();
+            }
+        }
+    }
 </script>
 </body>
 </html>

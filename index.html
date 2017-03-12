@@ -30,34 +30,27 @@
     </style>
 </head>
 <body>
+<!--
 <a href="https://github.com/district10/sfmViewer"><img style="position: absolute; top: 0; left: 0; border: 0;" src="https://camo.githubusercontent.com/567c3a48d796e2fc06ea80409cc9dd82bf714434/68747470733a2f2f73332e616d617a6f6e6177732e636f6d2f6769746875622f726962626f6e732f666f726b6d655f6c6566745f6461726b626c75655f3132313632312e706e67" alt="Fork me on GitHub" data-canonical-src="https://s3.amazonaws.com/github/ribbons/forkme_left_darkblue_121621.png"></a>
+-->
 <div id="container"></div>
 <div id="info">
     sfm data viewer, for OpenMVG, VisualSFM, etc
 </div>
 
-<!--
-<script src="https://code.jquery.com/jquery-3.1.0.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r67/three.min.js"></script>
-<script src="http://threejs.org/examples/js/libs/stats.min.js"></script>
-<script src="http://threejs.org/examples/js/Detector.js"></script>
-<script src="https://stemkoski.github.io/Three.js/js/THREEx.WindowResize.js"></script>
-<script src="http://threejs.org/examples/js/controls/TrackballControls.js"></script>
--->
 <script src="jquery-3.1.0.min.js"></script>
+<script src="Detector.js"></script>
 <script src="three.js"></script>
 <script src="stats.min.js"></script>
-<script src="Detector.js"></script>
-<script src="THREEx.WindowResize.js"></script>
-<script src="FlyControls.js"></script>
+<script src="OrbitControls.js"></script>
 <script src="dat.gui.js"></script>
 <script>
     var load_image = true;
-    var sfm_data;
+    var sfmModel;
     var stats, scene, renderer;
-    var light, camera, axisHelper;
+    var light, camera, axisHelperOrigin, axisHelperOrbit;
     var controls;
-    var cameraFrustums = [], particles;
+    var cameraFrustums = [], pointcloud;
     var clock = new THREE.Clock();
 
     var Config = function() {
@@ -77,7 +70,6 @@
                 r.readAsText(f);
             }
         });
-
         this.loadModel = function() {
             this.fileInput.click();
         }
@@ -85,45 +77,46 @@
     var config = new Config();
     var gui = new dat.GUI();
     gui.add(config, 'model', { OpenMVG: "sfm_data.json", VisualSFM: "sfm_data.nvm" } ).onChange(function(value){
-        load_sfm( config.model );
+        loadSfmFromUrl( config.model );
     }).name("Models");
     gui.add(config, 'loadModel').name("Load Model");
-    gui.add(config, 'cameraFrustumScale').min(0.1).max(5).step(0.1).onChange(function(value) {
+    gui.add(config, 'cameraFrustumScale').min(0.1).max(50).step(0.1).onChange(function(value) {
         for (var i = 0; i < cameraFrustums.length; i++) {
             cameraFrustums[i].scale.set(value, value, value);
         }
     }).name("Camera Scale");
     var f1 = gui.addFolder('Point Cloud'); f1.open();
     f1.add(config, 'pointSize').min(0.01).max(0.25).step(0.005).onChange(function(value) {
-        particles.material.size = value;
+        pointcloud.material.size = value;
     }).name("Size");
     f1.addColor(config, 'pointColor').onFinishChange(function(value){
-        particles.material.color = [value[0]/255.0, value[1]/255.0, value[2]/255.0];
+        pointcloud.material.color = [value[0]/255.0, value[1]/255.0, value[2]/255.0];
     }).name("Color");
 
     $( document ).ready(function() {
         if( !init() )  { animate(); }
-        load_sfm( config.model );
+        loadSfmFromUrl( config.model );
     });
 
-    function load_sfm(url){
+    function loadSfmFromUrl(url){
         console.log("loading "+url);
         if (url.endsWith(".json")) {
             $.getJSON(url, function(obj) {
-                sfm_data = obj;
-                init_scene();
-                openmvg_create_camerapose_geometries();
-                openmvg_create_pointcloud_geometry();
+                sfmModel = obj;
+                clearScene();
+                openmvgCreateCameraFrustums();
+                openmvgCreatePointcloud();
             }).fail(function(err) {
                 log("Load '"+url+"' failed.");
             });
         } else if (url.endsWith(".nvm")) {
-            console.log("loading "+url);
             $.get(url, function(text) {
-                console.log(text.substring(0, 200));
                 var model = parseNvmFile(text);
                 if (model.valid) {
-                    sfm_data = model;
+                    sfmModel = model;
+                    clearScene();
+                    nvmCreateCameraFrustums();
+                    nvmCreatePointcloud();
                 }
             }).fail(function(err) {
                 log("Load '"+url+"' failed. (Notice: '.nvm' file can only be loaded via a web server)");
@@ -131,139 +124,139 @@
         }
     }
 
-    function _create_camera_geometry(texture_url) {
+    function loadSfmFromText(text) {
+        var header = text.substring(0, 20).split('\n').join('').trim();
+        if (header.startsWith('{')) {
+            sfmModel = JSON.parse(text);
+            if (sfmModel["sfm_data_version"]) {
+                // OpenMVG
+                clearScene();
+                openmvgCreateCameraFrustums();
+                openmvgCreatePointcloud();
+            }
+        } else if (header.toLowerCase().startsWith('nvm')) {
+            // VisualSFM nvm file
+            var model = parseNvmFile(text);
+            if (model.valid) {
+                sfmModel = model;
+                clearScene();
+                nvmCreateCameraFrustums();
+                nvmCreatePointcloud();
+            }
+        }
+    }
 
+    function createCameraFrustum(url) {
         var geometry1 = new THREE.PlaneGeometry( 0.2, 0.2 );
         var geometry2 = new THREE.PlaneGeometry( 0.2, 0.2 );
         geometry2.applyMatrix( new THREE.Matrix4().makeRotationY( Math.PI ) );
         geometry2.applyMatrix( new THREE.Matrix4().makeRotationZ( Math.PI ) );
-
         var material1 = new THREE.MeshBasicMaterial({color: 0xffff00, side: THREE.FrontSide});
         var material2;
         if (load_image) {
             material2 = new THREE.MeshBasicMaterial({
-                map: new THREE.TextureLoader().load( texture_url )
+                map: new THREE.TextureLoader().load( url )
             });
-            console.log("Loading..."+texture_url);
         } else {
             material2 = new THREE.MeshBasicMaterial({color: 0xffffff, side: THREE.FrontSide});
         }
-
         var card = new THREE.Object3D();
         card.add( new THREE.Mesh( geometry1, material1 ));
         card.add( new THREE.Mesh( geometry2, material2 ));
-
-        // now we add the normal line
-        var _geometry = new THREE.Geometry();
-        _geometry.vertices.push(new THREE.Vector3(0, 0, 0));
-        _geometry.vertices.push(new THREE.Vector3(0, 0, 0.2));
-        var _material = new THREE.LineBasicMaterial({
-            color: 0x0000ff
-        });
-        var line = new THREE.Line(_geometry, _material);
-        card.add(line);
-
+        var axisHelper = new THREE.AxisHelper(0.1);
+        card.add(axisHelper);
         return card;
     }
 
-    function init_scene() {
+    function clearScene() {
         scene.children = [];
         cameraFrustums = [];
-        particles = {};
+        pointcloud = {};
         scene.add(camera);
         scene.add(light);
-        scene.add(axisHelper);
+        scene.add(axisHelperOrigin);
+        scene.add(axisHelperOrbit);
     }
 
-    function openmvg_create_camerapose_geometries(){
-
-        var camera_count = sfm_data.extrinsics.length;
+    function openmvgCreateCameraFrustums(){
+        var camera_count = sfmModel.extrinsics.length;
         for (var i = 0; i < camera_count; i++) {
-
-            var texture_url = sfm_data.root_path + '/' + sfm_data.views[i].value.ptr_wrapper.data.filename;
-            var plane = _create_camera_geometry(texture_url);
-            var center = sfm_data.extrinsics[i].value.center;
+            var url = sfmModel.root_path + '/' + sfmModel.views[i].value.ptr_wrapper.data.filename;
+            var plane = createCameraFrustum(url);
+            var center = sfmModel.extrinsics[i].value.center;
             plane.position.set(center[0], center[1], center[2]);
-            var rotation = sfm_data.extrinsics[i].value.rotation;
+            var rotation = sfmModel.extrinsics[i].value.rotation;
             var rotationMatrix = new THREE.Matrix4();
             rotationMatrix.set(
                 rotation[0][0], rotation[1][0], rotation[2][0],     0,
                 rotation[0][1], rotation[1][1], rotation[2][1],     0,
                 rotation[0][2], rotation[1][2], rotation[2][2],     0,
-                0,              0,              0,     1 );
+                0,              0,              0,                  1 );
             plane.quaternion.setFromRotationMatrix(rotationMatrix);
-            plane.isCameraFrustum = true;
-
             scene.add(plane);
             cameraFrustums.push(plane);
         }
     }
 
-    function nvm_create_camerapose_geometries() {
-
-        var camera_count = sfm_data.cameras.length;
-        for (var i = 0; i < camera_count; i++) {
-
-            var view = sfm_data.cameras[i];
-            var path = view.path;
-            var texture_url = path.substring(path.lastIndexOf('/')+1);
-            var plane = _create_camera_geometry("images/src/"+texture_url);
-            var center = view.X;
+    function nvmCreateCameraFrustums() {
+        var nCam = sfmModel.cameras.length;
+        for (var i = 0; i < nCam; ++i) {
+            var cam = sfmModel.cameras[i];
+            var path = cam.path;
+            path = path.substring(path.lastIndexOf('/')+1);
+            path = "images/src/" + path;
+            var plane = createCameraFrustum(path);
+            var center = cam.X;
             plane.position.set(center[0], center[1], center[2]);
-            plane.quaternion.set(view.quaternion);
-            plane.isCameraFrustum = true;
+            plane.quaternion.set(cam.quaternion);
             scene.add(plane);
             cameraFrustums.push(plane);
+
+            var geometry = new THREE.SphereGeometry(0.05, 16, 8);
+            var material = new THREE.MeshBasicMaterial({ wireframe: true, color: 0xff0000 });
+            var mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(center[0],center[1],center[2]);
+            scene.add(mesh);
         }
     }
 
-    function openmvg_create_pointcloud_geometry(){
-        var materials = [];
+    function openmvgCreatePointcloud(){
         var geometry = new THREE.Geometry();
-        var particleCount = sfm_data.structure.length;
-
-        for (var i = 0; i < particleCount; i++) {
-            var p = sfm_data.structure[i].value.X;
-            var vertex = new THREE.Vector3(p[0],p[1],p[2]);
-            geometry.vertices.push(vertex);
+        var nPoint = sfmModel.structure.length;
+        for (var i = 0; i < nPoint; ++i) {
+            var p = sfmModel.structure[i].value.X;
+            var v = new THREE.Vector3(p[0],p[1],p[2]);
+            geometry.vertices.push(v);
         }
-
         var material = new THREE.PointsMaterial({
             color: [1, 1, 1],
             size: 0.01
         });
-        particles = new THREE.Points(geometry, material);
-        particles.isParticles = true;
-        scene.add(particles);
+        pointcloud = new THREE.Points(geometry, material);
+        scene.add(pointcloud);
     }
 
-    function nvm_create_pointcloud_geometry(){
-        var materials = [];
+    function nvmCreatePointcloud(){
         var geometry = new THREE.Geometry();
-        var particleCount = sfm_data.points.length;
-
-        for (var i = 0; i < particleCount; i++) {
-            var p = sfm_data.points[i].X;
-            var vertex = new THREE.Vector3(p[0],p[1],p[2]);
-            geometry.vertices.push(vertex);
+        var nPoint = sfmModel.points.length;
+        for (var i = 0; i < nPoint; i++) {
+            var p = sfmModel.points[i].X;
+            var v = new THREE.Vector3(p[0],p[1],p[2]);
+            geometry.vertices.push(v);
         }
-
         var material = new THREE.PointsMaterial({
             color: [1, 1, 1],
             size: 0.01
         });
-        particles = new THREE.Points(geometry, material);
-        particles.isParticles = true;
-        scene.add(particles);
+        pointcloud = new THREE.Points(geometry, material);
+        scene.add(pointcloud);
     }
 
-    // init the scene
     function init(){
-
         if( Detector.webgl ){
             renderer = new THREE.WebGLRenderer({
-                antialias               : true,   // to get smoother output
-                preserveDrawingBuffer : true    // to allow screenshot
+                antialias: true,
+                preserveDrawingBuffer: true
             });
             renderer.setClearColor( 0xbbbbbb );
         } else {
@@ -287,70 +280,26 @@
         stats.domElement.style.right = '0px';
         document.body.appendChild( stats.domElement );
 
-        // create a scene
         scene = new THREE.Scene();
-        // put a camera in the scene
         camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.01, 1000 );
-        cameraposition.set(0, -1, -1); camera.up.y = -150;
+        camera.position.set(0, -1, -1); camera.up.y = -1;
         // camera.applyMatrix( new THREE.Matrix4().makeRotationZ( Math.PI ) );
 
-        // create a camera contol
-        controls = new THREE.FlyControls( camera, container );
-        controls.movementSpeed = 1000;
-        controls.rollSpeed = Math.PI / 24;
-        controls.autoForward = false;
-        controls.dragToLook = false;
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
 
-        // transparently support window resize
-        THREEx.WindowResize.bind(renderer, camera);
-
-        light = new THREE.AmbientLight( 0.3 * 0xffffff );
-        axisHelper = new THREE.AxisHelper(500);
-
+        light = new THREE.AmbientLight( 0.5 * 0xffffff );
+        axisHelperOrigin = new THREE.AxisHelper(500);
+        axisHelperOrbit = new THREE.AxisHelper(500);
     }
 
-    // animation loop
-    function animate() {
+    function animate(time) {
         requestAnimationFrame( animate );
-        // do the render
-        render();
-        // update stats
         stats.update();
-    }
-
-    // render the scene
-    function render() {
-        // update camera controls
         var delta = clock.getDelta();
         controls.update( delta );
-        // actually render the scene
+        axisHelperOrbit.position.copy(controls.target);
         renderer.render( scene, camera );
     }
-
-    document.addEventListener( 'dragover', function ( event ) {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = 'copy';
-    }, false );
-
-    document.addEventListener( 'dragenter', function ( event ) {
-        document.body.style.opacity = 0.5;
-    }, false );
-
-    document.addEventListener( 'dragleave', function ( event ) {
-        document.body.style.opacity = 1;
-    }, false );
-
-    document.addEventListener( 'drop', function ( event ) {
-        event.preventDefault();
-        var reader = new FileReader();
-        reader.addEventListener( 'load', function ( event ) {
-            var text = event.target.result;
-            loadSfmFromText(text);
-        }, false );
-        reader.readAsText ( event.dataTransfer.files[ 0 ] );
-        if( !init() )  { animate(); }
-        document.body.style.opacity = 1;
-    }, false );
 
     function parseNvmFile(text) {
         // Doc: http://ccwu.me/vsfm/doc.html#The output format: N-View Match (NVM)
@@ -442,27 +391,6 @@
         $("#info")[0].innerHTML = msg;
     }
 
-    function loadSfmFromText(text) {
-        var header = text.substring(0, 20).split('\n').join('');
-        if (header.startsWith('{')) {
-            sfm_data = JSON.parse(text);
-            if (sfm_data["sfm_data_version"]) {
-                // OpenMVG
-                init_scene();
-                openmvg_create_camerapose_geometries();
-                openmvg_create_pointcloud_geometry();
-            }
-        } else if (header.toLowerCase().startsWith('nvm')) {
-            // VisualSFM nvm file
-            var model = parseNvmFile(text);
-            if (model.valid) {
-                sfm_data = model;
-                init_scene();
-                nvm_create_camerapose_geometries();
-                nvm_create_pointcloud_geometry();
-            }
-        }
-    }
 </script>
 </body>
 </html>

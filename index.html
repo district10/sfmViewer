@@ -52,8 +52,7 @@
     var clock = new THREE.Clock();
 
     var Config = function() {
-        this.pointColor = [255, 255, 255];
-        this.pointSize = 0.01;
+        this.imageBaseUrl = "images/src";
         this.cameraFrustumScale = 1;
         this.model = 'sfm_data.json';
         this.fileInput = $('<input type="file" />');
@@ -70,10 +69,13 @@
         });
         this.loadModel = function() {
             this.fileInput.click();
-        }
+        };
+        this.pointSize = 0.01;
+        this.pointColor = [255, 255, 255];
     };
     var config = new Config();
     var gui = new dat.GUI();
+    gui.add(config, 'imageBaseUrl').listen().name("图片 Url 前缀");
     gui.add(config, 'model', { OpenMVG: "sfm_data.json", VisualSFM: "sfm_data.nvm" } ).onChange(function(value){
         loadSfmFromUrl( config.model );
     }).name("Models");
@@ -175,8 +177,10 @@
 
     function openmvgCreateCameraFrustums(){
         var camera_count = sfmModel.extrinsics.length;
+        var rootPath = config.imageBaseUrl; // sfmModel.root_path;
+        if (!rootPath.endsWith('/')) { rootPath += '/'; }
         for (var i = 0; i < camera_count; i++) {
-            var url = sfmModel.root_path + '/' + sfmModel.views[i].value.ptr_wrapper.data.filename;
+            var url = rootPath + sfmModel.views[i].value.ptr_wrapper.data.filename;
             var plane = createCameraFrustum(url);
             var center = sfmModel.extrinsics[i].value.center;
             plane.position.set(center[0], center[1], center[2]);
@@ -195,11 +199,12 @@
 
     function nvmCreateCameraFrustums() {
         var nCam = sfmModel.cameras.length;
+        var rootPath = config.imageBaseUrl;
+        if (!rootPath.endsWith('/')) { rootPath += '/'; }
         for (var i = 0; i < nCam; ++i) {
             var cam = sfmModel.cameras[i];
             var path = cam.path;
-            path = path.substring(path.lastIndexOf('/')+1);
-            path = "images/src/" + path;
+            path = rootPath + path.substring(path.lastIndexOf('/')+1);
             var plane = createCameraFrustum(path);
             var center = cam.X;
             plane.position.set(center[0], center[1], center[2]);

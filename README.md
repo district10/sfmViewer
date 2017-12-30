@@ -1,10 +1,8 @@
 # sfmViewer
 
--   OpenMVG sfm_data.json Viewer
+-   OpenMVG sfm_data.json Viewer, VisualSFM nvm file viewer
 
-TODO:
-
--   VisualSFM nvm viewer
+![](sfmViewer.png)
 
 ## Credits
 
